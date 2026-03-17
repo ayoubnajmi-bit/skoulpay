@@ -1,0 +1,990 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>SkoulPay</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Segoe UI',sans-serif;background:#f1f5f9;font-size:14px;}
+input,select,textarea{padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;font-family:inherit;width:100%;outline:none;background:white;color:#1a1a2e;}
+input:focus,select:focus{border-color:#0ea5e9;}
+.btn{display:inline-block;padding:9px 18px;border-radius:8px;border:none;cursor:pointer;font-family:inherit;font-weight:700;font-size:13px;text-align:center;}
+.card{background:white;border-radius:14px;padding:18px 20px;box-shadow:0 2px 10px rgba(0,0,0,.06);}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+// ─── DATA ───────────────────────────────────────────────────────────────────
+const MOIS=['Sep','Oct','Nov','Déc','Jan','Fév','Mar','Avr','Mai','Jun'];
+
+// ─── SUPABASE ─────────────────────────────────────────────────────────────────
+const SUPA_URL = 'https://yzifbchyewpxpiecinob.supabase.co';
+const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl6aWZiY2h5ZXdweHBpZWNpbm9iIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM3NTg0MTUsImV4cCI6MjA4OTMzNDQxNX0.MMCn5ct6449YL1tKdFRTYSBeECBKlW5y610SbwRvmkA';
+let sb = null;
+
+function initSupabase(){
+  try{
+    sb = supabase.createClient(SUPA_URL, SUPA_KEY);
+    console.log('Supabase connecté ✅');
+  }catch(e){
+    console.log('Supabase non disponible, mode local');
+  }
+}
+
+async function sbLogin(login, mdp){
+  if(!sb) return null;
+  try{
+    const {data,error} = await sb.from('users').select('*').eq('login',login).eq('mdp',mdp).single();
+    if(error||!data) return null;
+    return data;
+  }catch(e){ return null; }
+}
+
+async function sbLoadEleves(ecole){
+  if(!sb) return null;
+  try{
+    const {data,error} = await sb.from('eleves').select('*').eq('ecole',ecole);
+    if(error||!data) return null;
+    return data;
+  }catch(e){ return null; }
+}
+
+async function sbLoadPaiements(ecole){
+  if(!sb) return null;
+  try{
+    const {data,error} = await sb.from('paiements').select('*').eq('ecole',ecole);
+    if(error||!data) return null;
+    return data;
+  }catch(e){ return null; }
+}
+
+async function sbSavePaiement(eleveId, mois, statut, ecole){
+  if(!sb) return;
+  try{
+    await sb.from('paiements').upsert({
+      eleve_id: eleveId,
+      mois: mois,
+      statut: statut,
+      ecole: ecole,
+      annee: '2024-2025',
+      updated_at: new Date().toISOString()
+    }, {onConflict: 'eleve_id,mois,annee'});
+  }catch(e){ console.log('Erreur save paiement:', e); }
+}
+
+async function sbSaveInscr(eleveId, statut, ecole){
+  if(!sb) return;
+  try{
+    await sb.from('paiements').upsert({
+      eleve_id: eleveId,
+      mois: 'inscription',
+      statut: statut,
+      ecole: ecole,
+      annee: '2024-2025',
+      updated_at: new Date().toISOString()
+    }, {onConflict: 'eleve_id,mois,annee'});
+  }catch(e){ console.log('Erreur save inscr:', e); }
+}
+
+async function sbLoadEcoles(){
+  if(!sb) return null;
+  try{
+    const {data,error} = await sb.from('ecoles').select('*');
+    if(error||!data) return null;
+    return data;
+  }catch(e){ return null; }
+}
+
+async function sbSaveEcole(ecole){
+  if(!sb) return;
+  try{
+    await sb.from('ecoles').upsert(ecole);
+  }catch(e){ console.log('Erreur save ecole:', e); }
+}
+
+async function sbSaveUser(user){
+  if(!sb) return;
+  try{
+    await sb.from('users').insert(user);
+  }catch(e){ console.log('Erreur save user:', e); }
+}
+
+async function sbLoadUsers(){
+  if(!sb) return null;
+  try{
+    const {data,error} = await sb.from('users').select('*');
+    if(error||!data) return null;
+    return data;
+  }catch(e){ return null; }
+}
+
+async function chargerDonnees(user){
+  // Charger élèves depuis Supabase
+  const elevesDb = await sbLoadEleves(user.ecole);
+  if(elevesDb && elevesDb.length > 0){
+    ELEVES_DATA.length = 0;
+    elevesDb.forEach(e => ELEVES_DATA.push({
+      id: e.id,
+      mat: e.matricule||'',
+      nom: e.nom,
+      classe: e.classe||'',
+      niveau: e.niveau||'',
+      frais: e.frais||0,
+      inscr: e.inscr||0,
+      tuteur: e.tuteur||'',
+      tel: e.tel||'',
+    }));
+  }
+  
+  // Charger paiements depuis Supabase
+  const paiDb = await sbLoadPaiements(user.ecole);
+  if(paiDb && paiDb.length > 0){
+    // Reset paiements
+    ELEVES_DATA.forEach(e => {
+      if(!S.paiements[e.id]) S.paiements[e.id] = {inscr:'impayé', mois:{}};
+      MOIS.forEach(m => { if(!S.paiements[e.id].mois[m]) S.paiements[e.id].mois[m]='impayé'; });
+    });
+    paiDb.forEach(p => {
+      if(!S.paiements[p.eleve_id]) S.paiements[p.eleve_id] = {inscr:'impayé', mois:{}};
+      if(p.mois === 'inscription') S.paiements[p.eleve_id].inscr = p.statut;
+      else S.paiements[p.eleve_id].mois[p.mois] = p.statut;
+    });
+  }
+
+  // Charger écoles (pour superadmin)
+  if(user.role === 'superadmin'){
+    const ecolesDb = await sbLoadEcoles();
+    if(ecolesDb && ecolesDb.length > 0){
+      S.ecoles = ecolesDb.map(e => ({
+        id: e.id, nom: e.nom, ville: e.ville||'',
+        forfait: e.forfait||'starter', mrr: e.mrr||199,
+        status: e.status||'actif', eleves: e.eleves||0
+      }));
+    }
+    const usersDb = await sbLoadUsers();
+    if(usersDb && usersDb.length > 0){
+      S.users = usersDb.map(u => ({
+        id: u.id, nom: u.nom, role: u.role,
+        login: u.login, mdp: u.mdp,
+        avatar: u.avatar||u.nom.slice(0,2).toUpperCase(),
+        ecole: u.ecole||''
+      }));
+    }
+  }
+}
+
+// Chargement SheetJS
+(function(){var s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';s.onload=function(){window._XLSX=window.XLSX;};document.head.appendChild(s);})();
+
+// Mapping mois calendrier -> label école
+const MOIS_MAP={9:'Sep',10:'Oct',11:'Nov',12:'Déc',1:'Jan',2:'Fév',3:'Mar',4:'Avr',5:'Mai',6:'Jun'};
+const MOIS_ORDER={Sep:0,Oct:1,Nov:2,Déc:3,Jan:4,Fév:5,Mar:6,Avr:7,Mai:8,Jun:9};
+
+function getMoisActuel(){
+  const m=new Date().getMonth()+1; // 1-12
+  return MOIS_MAP[m]||null;
+}
+
+function getJourActuel(){return new Date().getDate();}
+
+// Un mois est "passé" si son index dans l'année scolaire < index du mois actuel
+function isMoisPasse(moisLabel){
+  const actuel=getMoisActuel();
+  if(!actuel)return false;
+  return MOIS_ORDER[moisLabel] < MOIS_ORDER[actuel];
+}
+function isMoisActuel(moisLabel){return moisLabel===getMoisActuel();}
+function isMoisFutur(moisLabel){
+  const actuel=getMoisActuel();
+  if(!actuel)return false;
+  return MOIS_ORDER[moisLabel] > MOIS_ORDER[actuel];
+}
+
+// Logique impayé en retard :
+// - mois passé : toujours en retard si impayé
+// - mois actuel : en retard seulement si impayé ET aujourd'hui > jourLimite
+// - mois futur : jamais en retard (pas encore échu)
+function isEnRetard(moisLabel, statut, jourLimite){
+  if(statut==='payé') return false;
+  if(isMoisPasse(moisLabel)) return true;
+  if(isMoisActuel(moisLabel)) return getJourActuel() > jourLimite;
+  return false; // mois futur
+}
+
+// Pour un élève : est-il en retard sur UN des mois de la liste ?
+function eleveEnRetard(paiement, moisList, jourLimite){
+  if(!paiement) return true;
+  if(paiement.inscr==='impayé') return true;
+  return moisList.some(m=>isEnRetard(m, paiement.mois[m]||'impayé', jourLimite));
+}
+
+const ELEVES_DATA=[
+  {id:1,mat:'2024-001',nom:'Karim Benali',   classe:'CM1-A', niveau:'CM1',  frais:800, inscr:500,tuteur:'Ahmed Benali',   tel:'0661-234567'},
+  {id:2,mat:'2024-002',nom:'Sara Moussaoui', classe:'CM1-A', niveau:'CM1',  frais:800, inscr:500,tuteur:'Fatima Moussaoui',tel:'0662-345678'},
+  {id:3,mat:'2024-003',nom:'Aya Idrissi',    classe:'CM1-A', niveau:'CM1',  frais:800, inscr:500,tuteur:'Omar Idrissi',   tel:'0663-456789'},
+  {id:4,mat:'2024-004',nom:'Youssef Tazi',   classe:'6ème-B',niveau:'6ème', frais:950, inscr:600,tuteur:'Hassan Tazi',    tel:'0664-567890'},
+  {id:5,mat:'2024-005',nom:'Hiba Oukili',    classe:'6ème-B',niveau:'6ème', frais:950, inscr:600,tuteur:'Zineb Oukili',   tel:'0665-678901'},
+  {id:6,mat:'2024-006',nom:'Adam Belhaj',    classe:'6ème-B',niveau:'6ème', frais:950, inscr:600,tuteur:'Samira Belhaj',  tel:'0666-789012'},
+  {id:7,mat:'2024-007',nom:'Nadia El Fassi', classe:'3ème-A',niveau:'3ème', frais:1100,inscr:700,tuteur:'Nour El Fassi',  tel:'0667-890123'},
+  {id:8,mat:'2024-008',nom:'Hamza Berrada',  classe:'3ème-A',niveau:'3ème', frais:1100,inscr:700,tuteur:'Souad Berrada',  tel:'0668-901234'},
+  {id:9,mat:'2024-009',nom:'Leila Tahiri',   classe:'3ème-A',niveau:'3ème', frais:1100,inscr:700,tuteur:'Rachid Tahiri',  tel:'0669-012345'},
+  {id:10,mat:'2024-010',nom:'Mohamed Chaoui',classe:'3ème-A',niveau:'3ème', frais:1100,inscr:700,tuteur:'Khalid Chaoui', tel:'0660-123456'},
+  {id:11,mat:'2024-011',nom:'Lina Berrada',  classe:'CM1-A', niveau:'CM1',  frais:800, inscr:500,tuteur:'Souad Berrada',  tel:'0661-321654'},
+  {id:12,mat:'2024-012',nom:'Omar Tahiri',   classe:'CM1-A', niveau:'CM1',  frais:800, inscr:500,tuteur:'Rachid Tahiri',  tel:'0662-654321'},
+];
+
+function genPay(){
+  const p={};
+  ELEVES_DATA.forEach(e=>{
+    p[e.id]={inscr:Math.random()>.15?'payé':'impayé',mois:{}};
+    MOIS.forEach((m,i)=>{p[e.id].mois[m]=(i<4?Math.random()>.1:i<7?Math.random()>.45:Math.random()>.7)?'payé':'impayé';});
+  });
+  return p;
+}
+
+const S={
+  user:null,
+  paiements:genPay(),
+  tab:'dashboard',
+  // paiements
+  selEleve:null,search:'',filtre:'tous',
+  periodeMode:'mois',periodeMois:MOIS_MAP[new Date().getMonth()+1]||'Jan',periodeTrimes:'T1',
+  config:{jourLimite:10},
+  // admin
+  adminSub:'ecoles',
+  selEcole:null,
+  ecoles:[
+    {id:1,nom:'École Al Nour',     ville:'Casablanca',forfait:'complet',   mrr:699,status:'actif',  eleves:12},
+    {id:2,nom:'Lycée Ibn Khaldoun',ville:'Rabat',      forfait:'académique',mrr:399,status:'actif',  eleves:34},
+    {id:3,nom:'École Les Étoiles', ville:'Marrakech',  forfait:'starter',   mrr:199,status:'actif',  eleves:28},
+    {id:4,nom:'Collège Avicenne',  ville:'Tanger',     forfait:'complet',   mrr:699,status:'nouveau',eleves:0},
+  ],
+  users:[
+    {id:1,nom:'Super Admin', role:'superadmin',login:'admin',    mdp:'admin123', avatar:'SA',ecole:''},
+    {id:2,nom:'Dir. Amrani', role:'directeur', login:'directeur',mdp:'dir123',   avatar:'DA',ecole:'École Al Nour'},
+    {id:3,nom:'Zineb Kabbaj',role:'admin',     login:'zineb',    mdp:'zineb123', avatar:'ZK',ecole:'École Al Nour'},
+    {id:4,nom:'Salma Razi',  role:'admin',     login:'salma',    mdp:'salma123', avatar:'SR',ecole:'École Al Nour'},
+    {id:5,nom:'Dir. Benali', role:'directeur', login:'dir_rabat',mdp:'dir123',   avatar:'DB',ecole:'Lycée Ibn Khaldoun'},
+    {id:6,nom:'M. Karimi',   role:'prof',      login:'prof_k',   mdp:'prof123',  avatar:'KA',ecole:'École Al Nour'},
+  ],
+  form:{},filtreRole:'tous',importPreview:null,importMode:null,
+};
+
+// ─── UTILS ───────────────────────────────────────────────────────────────────
+const FC={complet:'#6366f1',académique:'#0ea5e9',starter:'#22c55e'};
+const FB={complet:'#eef2ff',académique:'#f0f9ff',starter:'#f0fdf4'};
+const SC={actif:'#22c55e',nouveau:'#f59e0b',suspendu:'#ef4444'};
+const RC={directeur:{bg:'#dbeafe',tx:'#1e40af',ic:'🎓'},admin:{bg:'#dcfce7',tx:'#166534',ic:'👩‍💼'},prof:{bg:'#fef3c7',tx:'#92400e',ic:'📚'}};
+
+function av(t,c,sz=32){return `<div style="width:${sz}px;height:${sz}px;border-radius:50%;background:${c};display:inline-flex;align-items:center;justify-content:center;color:white;font-weight:700;font-size:${Math.round(sz*.34)}px;flex-shrink:0">${t}</div>`;}
+function badge(t,c,bg){return `<span style="background:${bg||c+'22'};color:${c};border-radius:20px;padding:3px 10px;font-size:11px;font-weight:700;white-space:nowrap">${t}</span>`;}
+function moisFromP(){if(S.periodeMode==='annee')return MOIS;if(S.periodeMode==='mois')return[S.periodeMois];const t={T1:['Sep','Oct','Nov'],T2:['Déc','Jan','Fév'],T3:['Mar','Avr','Mai'],T4:['Jun']};return t[S.periodeTrimes]||MOIS;}
+function calcStats(eleves,pay,ml,inclI,jourLimite){
+  const jl=jourLimite||10;
+  let att=0,rec=0,nbR=0;
+  eleves.forEach(e=>{
+    const p=pay[e.id];if(!p)return;
+    if(inclI){att+=e.inscr;if(p.inscr==='payé')rec+=e.inscr;}
+    ml.forEach(m=>{
+      // On compte dans l'attendu seulement les mois échus (passé + actuel si délai dépassé)
+      const echu=isMoisPasse(m)||(isMoisActuel(m)&&getJourActuel()>=jl)||isMoisFutur(m)===false;
+      att+=e.frais;
+      if(p.mois?.[m]==='payé')rec+=e.frais;
+    });
+    if(eleveEnRetard(p,ml,jl))nbR++;
+  });
+  return{att,rec,nbR,taux:att>0?((rec/att)*100).toFixed(1):0,manq:att-rec};
+}
+
+// ─── LOGIN ────────────────────────────────────────────────────────────────────
+function renderLogin(){
+  return `<div style="min-height:100vh;background:linear-gradient(135deg,#1e1b4b,#1e3a5f 60%,#4c1d95);display:flex;align-items:center;justify-content:center;padding:20px">
+  <div style="background:white;border-radius:24px;padding:36px 32px;width:100%;max-width:400px;box-shadow:0 25px 60px rgba(0,0,0,.4)">
+    <div style="text-align:center;margin-bottom:24px">
+      <div style="font-size:48px;margin-bottom:6px">🏫</div>
+      <div style="font-size:22px;font-weight:800;color:#1e1b4b;letter-spacing:-1px">SkoulPay</div>
+      <div style="font-size:12px;color:#94a3b8;margin-top:3px">Gestion des paiements scolaires</div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:5px;margin-bottom:18px;background:#f8fafc;border-radius:12px;padding:4px">
+      ${[['⚡','Admin','admin','admin123'],['🎓','Directeur','directeur','dir123'],['👩‍💼','Assistante','zineb','zineb123']].map(([ic,l,lg,mp])=>`
+      <button onclick="qLogin('${lg}','${mp}')" style="padding:8px 3px;border-radius:8px;border:none;cursor:pointer;background:transparent;font-size:10px;font-weight:600;color:#64748b;font-family:inherit">
+        <div style="font-size:18px">${ic}</div><div>${l}</div>
+      </button>`).join('')}
+    </div>
+    <input id="li" placeholder="Identifiant" style="margin-bottom:8px" onkeydown="if(event.key==='Enter')doLogin()"/>
+    <input id="mp" type="password" placeholder="Mot de passe" style="margin-bottom:12px" onkeydown="if(event.key==='Enter')doLogin()"/>
+    <div id="err" style="display:none;background:#fee2e2;color:#991b1b;border-radius:8px;padding:9px 14px;font-size:13px;margin-bottom:10px"></div>
+    <button onclick="doLogin()" style="width:100%;padding:13px;border-radius:10px;border:none;background:linear-gradient(135deg,#1e1b4b,#4338ca);color:white;font-weight:700;font-size:15px;cursor:pointer;font-family:inherit">Se connecter →</button>
+    <div style="margin-top:12px;background:#f8fafc;border-radius:8px;padding:9px;font-size:10px;color:#94a3b8;line-height:1.8"><b>Demo :</b> admin/admin123 · directeur/dir123 · zineb/zineb123</div>
+  </div></div>`;
+}
+
+// ─── TOPBAR ───────────────────────────────────────────────────────────────────
+function renderTopbar(){
+  const u=S.user;
+  const bg={superadmin:'#6366f1',directeur:'#0ea5e9',admin:'#22c55e'}[u.role]||'#1e3a5f';
+  const lbl={superadmin:'Super Admin ⚡',directeur:'Directeur 🎓',admin:'Assistante 👩‍💼'}[u.role]||u.role;
+  return `<div style="background:${bg};padding:0 18px;height:54px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 4px 16px rgba(0,0,0,.15)">
+  <div style="display:flex;align-items:center;gap:10px">
+    <span style="font-size:20px">🏫</span>
+    <div><div style="color:white;font-weight:800;font-size:15px">SkoulPay</div><div style="color:rgba(255,255,255,.6);font-size:10px">École Al Nour · ${lbl}</div></div>
+  </div>
+  <div style="display:flex;align-items:center;gap:10px">
+    ${av(u.avatar,'rgba(255,255,255,.25)',30)}
+    <span style="color:white;font-weight:600;font-size:12px">${u.nom}</span>
+    <button onclick="logout()" style="background:rgba(255,255,255,.15);color:white;border:1px solid rgba(255,255,255,.3);border-radius:8px;padding:5px 12px;cursor:pointer;font-size:11px;font-weight:600;font-family:inherit">Déco</button>
+  </div></div>`;
+}
+
+// ─── TABS ─────────────────────────────────────────────────────────────────────
+function renderTabs(){
+  const u=S.user;
+  const all=[
+    {id:'dashboard',ic:'📊',l:'Dashboard',  roles:['superadmin','directeur','admin']},
+    {id:'saisir',   ic:'💳',l:'Saisir',     roles:['directeur','admin']},
+    {id:'alertes',  ic:'🔔',l:'Alertes',    roles:['directeur','admin']},
+    {id:'rapport',  ic:'📥',l:'Rapport',    roles:['directeur','admin']},
+    {id:'eleves',   ic:'🧑‍🎓',l:'Élèves',  roles:['directeur','admin']},
+    {id:'admin',    ic:'🏢',l:'Gestion',    roles:['superadmin']},
+    {id:'params',   ic:'⚙️',l:'Paramètres',roles:['directeur','admin']},
+  ];
+  const tabs=all.filter(t=>t.roles.includes(u.role));
+  return `<div style="display:flex;gap:2px;padding:10px 16px 0;background:white;border-bottom:1px solid #f1f5f9;flex-wrap:wrap">
+    ${tabs.map(t=>`<button onclick="setTab('${t.id}')" style="padding:9px 14px;border:none;cursor:pointer;font-family:inherit;font-size:12px;font-weight:${S.tab===t.id?700:500};background:transparent;color:${S.tab===t.id?'#1e3a5f':'#64748b'};border-bottom:${S.tab===t.id?'2.5px solid #1e3a5f':'2.5px solid transparent'};border-radius:0">${t.ic} ${t.l}</button>`).join('')}
+  </div>`;
+}
+
+// ─── DASHBOARD ────────────────────────────────────────────────────────────────
+function renderDashboard(){
+  const ml=moisFromP(),inclI=S.periodeMode==='annee',st=calcStats(ELEVES_DATA,S.paiements,ml,inclI,S.config.jourLimite);
+  const lbl=S.periodeMode==='annee'?'Année 2024-2025':S.periodeMode==='trimestre'?S.periodeTrimes:`Mois de ${S.periodeMois}`;
+  const taux=parseFloat(st.taux);
+  return `<div style="margin-bottom:18px"><h2 style="font-size:20px;font-weight:800;color:#1a1a2e;margin-bottom:3px">Bonjour, ${S.user.nom} 👋</h2><p style="color:#64748b;font-size:13px">${new Date().toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</p></div>
+  <div style="display:flex;gap:8px;align-items:center;background:white;border-radius:12px;padding:11px 15px;margin-bottom:16px;box-shadow:0 2px 8px rgba(0,0,0,.05);flex-wrap:wrap">
+    <span style="font-size:12px;font-weight:700;color:#64748b">📅 Période :</span>
+    ${['annee','trimestre','mois'].map(m=>`<button onclick="S.periodeMode='${m}';render()" style="padding:5px 12px;border-radius:8px;border:none;cursor:pointer;font-family:inherit;font-size:12px;font-weight:600;background:${S.periodeMode===m?'#1e3a5f':'#f1f5f9'};color:${S.periodeMode===m?'white':'#64748b'}">${m==='annee'?'Année':m==='trimestre'?'Trimestre':'Mois'}</button>`).join('')}
+    ${S.periodeMode==='mois'?`<select onchange="S.periodeMois=this.value;render()" style="width:auto;padding:5px 10px;font-size:12px">${MOIS.map(m=>`<option${S.periodeMois===m?' selected':''}>${m}</option>`).join('')}</select>`:''}
+    ${S.periodeMode==='trimestre'?`<select onchange="S.periodeTrimes=this.value;render()" style="width:auto;padding:5px 10px;font-size:12px">${['T1','T2','T3','T4'].map(t=>`<option${S.periodeTrimes===t?' selected':''}>${t}</option>`).join('')}</select>`:''}
+    <span style="margin-left:auto;background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:4px 11px;font-size:11px;font-weight:700;color:#0369a1">${lbl}</span>
+    <span style="background:${getJourActuel()>S.config.jourLimite?'#fee2e2':'#f0fdf4'};border:1px solid ${getJourActuel()>S.config.jourLimite?'#fca5a5':'#86efac'};border-radius:8px;padding:4px 11px;font-size:11px;font-weight:700;color:${getJourActuel()>S.config.jourLimite?'#b91c1c':'#15803d'}">
+      ${getJourActuel()>S.config.jourLimite?'⚠️ Délai dépassé (j.'+S.config.jourLimite+')':'✓ Délai : avant le '+S.config.jourLimite}
+    </span>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
+    ${[{ic:'🧑‍🎓',l:'Élèves',v:ELEVES_DATA.length,c:'#0ea5e9',sub:'',hl:0},{ic:'📋',l:'Total attendu',v:st.att.toLocaleString()+' MAD',c:'#0ea5e9',sub:lbl,hl:1},{ic:'✅',l:'Total perçu',v:st.rec.toLocaleString()+' MAD',c:'#22c55e',sub:'Taux : '+st.taux+'%',hl:0},{ic:'❌',l:'Reste',v:st.manq.toLocaleString()+' MAD',c:'#ef4444',sub:st.nbR+' en retard',hl:0}].map(c=>`
+    <div style="background:${c.hl?'#fffbeb':'white'};border-radius:14px;padding:14px;box-shadow:${c.hl?'0 0 0 2px #fbbf24,0 4px 12px rgba(0,0,0,.08)':'0 2px 10px rgba(0,0,0,.06)'};border-left:4px solid ${c.c}">
+      <div style="width:38px;height:38px;border-radius:10px;background:${c.c}18;display:flex;align-items:center;justify-content:center;font-size:18px;margin-bottom:8px">${c.ic}</div>
+      <div style="font-size:17px;font-weight:800;color:#1a1a2e">${c.v}</div>
+      <div style="font-size:11px;font-weight:600;color:#64748b;margin-top:1px">${c.l}</div>
+      ${c.sub?`<div style="font-size:10px;color:${c.hl?'#d97706':c.c};font-weight:700;margin-top:1px">${c.sub}</div>`:''}
+    </div>`).join('')}
+  </div>
+  <div class="card" style="margin-bottom:14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div><div style="font-weight:700;font-size:14px;color:#1a1a2e">Taux de recouvrement</div><div style="font-size:11px;color:#64748b">${lbl}</div></div>
+      <div style="font-size:24px;font-weight:800;color:${taux>75?'#22c55e':taux>50?'#f59e0b':'#ef4444'}">${st.taux}%</div>
+    </div>
+    <div style="background:#f1f5f9;border-radius:20px;height:16px;overflow:hidden;position:relative">
+      <div style="width:${st.taux}%;height:100%;background:${taux>75?'#22c55e':taux>50?'#f59e0b':'#ef4444'};border-radius:20px;transition:width .6s"></div>
+      <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#475569">${st.rec.toLocaleString()} MAD perçus</div>
+    </div>
+  </div>
+  ${S.periodeMode==='mois'?`<div class="card"><div style="font-weight:700;font-size:14px;color:#1a1a2e;margin-bottom:12px">Élèves — ${S.periodeMois}</div><div style="display:grid;gap:6px">${ELEVES_DATA.map(e=>{
+    const ok=S.paiements[e.id]?.mois[S.periodeMois]==='payé';
+    const futur=isMoisFutur(S.periodeMois);
+    const enR=isEnRetard(S.periodeMois,S.paiements[e.id]?.mois[S.periodeMois]||'impayé',S.config.jourLimite);
+    const border=ok?'#86efac':enR?'#fca5a5':futur?'#e2e8f0':'#fde68a';
+    const bg=ok?'#f0fdf4':enR?'#fff5f5':futur?'#f8fafc':'#fffbeb';
+    const color=ok?'#15803d':enR?'#b91c1c':futur?'#94a3b8':'#b45309';
+    const avColor=ok?'#22c55e':enR?'#ef4444':futur?'#94a3b8':'#f59e0b';
+    const icon=ok?'✓ '+e.frais+' MAD':futur?'– futur':'✗ '+e.frais+' MAD';
+    return`<div style="display:flex;align-items:center;gap:9px;padding:8px 11px;border-radius:9px;background:${bg};border:1px solid ${border}">${av(e.nom.split(' ').map(n=>n[0]).join('').slice(0,2),avColor,28)}<div style="flex:1"><div style="font-weight:600;font-size:12px;color:#1a1a2e">${e.nom}</div><div style="font-size:10px;color:#64748b">${e.mat} · ${e.classe}</div></div><div style="font-weight:800;font-size:12px;color:${color}">${icon}</div></div>`;
+  }).join('')}</div></div>`
+  :`<div class="card"><div style="font-weight:700;font-size:14px;color:#1a1a2e;margin-bottom:12px">Détail par mois</div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr style="background:#f8fafc">${['Mois','Attendu','Perçu','Reste','Taux','Payés'].map(h=>`<th style="padding:8px 11px;text-align:left;font-weight:700;color:#64748b;font-size:11px">${h}</th>`).join('')}</tr></thead><tbody>${ml.map((m,i)=>{const a=ELEVES_DATA.reduce((s,e)=>s+e.frais,0);const r=ELEVES_DATA.reduce((s,e)=>s+(S.paiements[e.id]?.mois[m]==='payé'?e.frais:0),0);const tx=a>0?((r/a)*100).toFixed(0):0;const np=ELEVES_DATA.filter(e=>S.paiements[e.id]?.mois[m]==='payé').length;return`<tr style="border-top:1px solid #f1f5f9;background:${i%2===0?'white':'#fafbff'}"><td style="padding:8px 11px;font-weight:700;color:#1a1a2e">${m}</td><td style="padding:8px 9px;color:#0ea5e9;font-weight:600">${a.toLocaleString()}</td><td style="padding:8px 9px;color:#22c55e;font-weight:700">${r.toLocaleString()}</td><td style="padding:8px 9px;color:${a-r>0?'#ef4444':'#22c55e'};font-weight:600">${(a-r).toLocaleString()}</td><td style="padding:8px 11px"><div style="display:flex;align-items:center;gap:5px"><div style="flex:1;background:#f1f5f9;border-radius:20px;height:6px"><div style="width:${tx}%;height:100%;background:${tx>75?'#22c55e':tx>50?'#f59e0b':'#ef4444'};border-radius:20px"></div></div><span style="font-size:10px;font-weight:700;width:28px">${tx}%</span></div></td><td style="padding:8px 11px;text-align:center"><span style="font-weight:700;color:#22c55e">${np}</span><span style="color:#94a3b8;font-size:10px"> / ${ELEVES_DATA.length}</span></td></tr>`;}).join('')}</tbody></table></div></div>`}`;
+}
+
+// ─── SAISIR ───────────────────────────────────────────────────────────────────
+function renderSaisir(){
+  const list=ELEVES_DATA.filter(e=>{
+    if(!e.nom.toLowerCase().includes(S.search.toLowerCase()))return false;
+    if(S.filtre==='tous')return true;
+    const p=S.paiements[e.id];
+    const enR=eleveEnRetard(p,MOIS,S.config.jourLimite);
+    return S.filtre==='retard'?enR:!enR;
+  });
+  const sel=ELEVES_DATA.find(e=>e.id===S.selEleve);const p=sel?S.paiements[sel.id]:null;
+  const recu=sel&&p?(p.inscr==='payé'?sel.inscr:0)+MOIS.reduce((s,m)=>s+(p.mois[m]==='payé'?sel.frais:0),0):0;
+  const att=sel?sel.inscr+MOIS.length*sel.frais:0;
+  return renderLegende()+`<div style="display:grid;grid-template-columns:255px 1fr;gap:14px">
+  <div class="card" style="padding:11px">
+    <input placeholder="🔍 Rechercher..." value="${S.search}" oninput="S.search=this.value;updateListeEleves()" style="margin-bottom:8px"/>
+    <div style="display:flex;gap:4px;margin-bottom:9px">
+      ${[['tous','Tous','#475569'],['ok','Payés','#15803d'],['retard','Retard','#b91c1c']].map(([v,l,c])=>`<button onclick="S.filtre='${v}';updateListeEleves()" style="flex:1;padding:5px 3px;border-radius:6px;border:none;cursor:pointer;font-size:10px;font-weight:700;font-family:inherit;background:${S.filtre===v?c+'22':'#f1f5f9'};color:${S.filtre===v?c:'#64748b'}">${l}</button>`).join('')}
+    </div>
+    <div id="liste-eleves" style="max-height:490px;overflow-y:auto">
+      ${list.map(el=>{const nb=S.paiements[el.id]?MOIS.filter(m=>S.paiements[el.id].mois[m]==='impayé').length:MOIS.length;const enR=nb>0||S.paiements[el.id]?.inscr==='impayé';return`<div onclick="S.selEleve=${el.id};render()" style="padding:8px;border-radius:9px;margin-bottom:3px;cursor:pointer;background:${S.selEleve===el.id?'#f0f9ff':'transparent'};border:2px solid ${S.selEleve===el.id?'#0ea5e9':'transparent'}"><div style="display:flex;align-items:center;gap:7px">${av(el.nom.split(' ').map(n=>n[0]).join('').slice(0,2),enR?'#ef4444':'#0ea5e9',27)}<div style="flex:1;min-width:0"><div style="font-weight:600;font-size:12px;color:#1a1a2e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${el.nom}</div><div style="font-size:10px;color:#94a3b8">${el.mat}</div></div>${enR?`<span style="background:#fee2e2;color:#b91c1c;border-radius:20px;padding:1px 5px;font-size:9px;font-weight:700">${nb}</span>`:'<span style="font-size:12px">✅</span>'}</div></div>`;}).join('')}
+    </div>
+  </div>
+  ${sel&&p?`<div class="card">
+    <div style="display:flex;align-items:center;gap:11px;margin-bottom:14px;padding-bottom:12px;border-bottom:2px solid #f1f5f9">
+      ${av(sel.nom.split(' ').map(n=>n[0]).join('').slice(0,2),'#0ea5e9',42)}
+      <div style="flex:1"><div style="font-size:16px;font-weight:800;color:#1a1a2e">${sel.nom}</div><div style="font-size:11px;color:#64748b">${sel.mat} · ${sel.classe} · ${sel.tuteur} · ${sel.tel}</div></div>
+      <div style="text-align:right"><div style="font-size:16px;font-weight:800;color:${recu>=att?'#22c55e':'#ef4444'}">${recu.toLocaleString()} MAD</div><div style="font-size:10px;color:#94a3b8">/ ${att.toLocaleString()} MAD</div></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:14px">
+      <button onclick="mTout(${sel.id},'payé')" style="flex:1;padding:8px;border-radius:9px;border:2px solid #86efac;background:#dcfce7;color:#15803d;cursor:pointer;font-weight:700;font-size:12px;font-family:inherit">✓ Tout payé</button>
+      <button onclick="mTout(${sel.id},'impayé')" style="flex:1;padding:8px;border-radius:9px;border:2px solid #fca5a5;background:#fee2e2;color:#b91c1c;cursor:pointer;font-weight:700;font-size:12px;font-family:inherit">✗ Tout impayé</button>
+    </div>
+    <div style="font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:1px;margin-bottom:7px">INSCRIPTION — ${sel.inscr} MAD</div>
+    <button onclick="tInscr(${sel.id})" style="display:flex;align-items:center;gap:9px;width:100%;padding:10px 13px;border-radius:9px;border:2px solid ${p.inscr==='payé'?'#86efac':'#fca5a5'};background:${p.inscr==='payé'?'#dcfce7':'#fee2e2'};cursor:pointer;font-family:inherit;text-align:left;margin-bottom:14px">
+      <div style="width:28px;height:28px;border-radius:7px;background:${p.inscr==='payé'?'#15803d22':'#b91c1c22'};display:flex;align-items:center;justify-content:center;font-size:15px;color:${p.inscr==='payé'?'#15803d':'#b91c1c'};font-weight:800">${p.inscr==='payé'?'✓':'✗'}</div>
+      <div style="font-weight:700;font-size:12px;color:${p.inscr==='payé'?'#15803d':'#b91c1c'}">${p.inscr==='payé'?'Payé — cliquer pour changer':'Impayé — cliquer pour payer'}</div>
+    </button>
+    <div style="font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:1px;margin-bottom:9px">MENSUALITÉS — ${sel.frais} MAD/mois</div>
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:5px">
+      ${MOIS.map(m=>{
+      const ok=p.mois[m]==='payé';
+      const futur=isMoisFutur(m);
+      const actuel=isMoisActuel(m);
+      const enR=isEnRetard(m,p.mois[m]||'impayé',S.config.jourLimite);
+      // couleur: vert=payé, rouge=en retard, orange=impayé mais pas encore échu, gris=futur
+      const border=ok?'#86efac':enR?'#fca5a5':futur?'#e2e8f0':'#fde68a';
+      const bg=ok?'#dcfce7':enR?'#fee2e2':futur?'#f8fafc':'#fffbeb';
+      const color=ok?'#15803d':enR?'#b91c1c':futur?'#94a3b8':'#b45309';
+      const icon=ok?'✓':futur?'–':'✗';
+      return`<button onclick="tMois(${sel.id},'${m}')" style="padding:9px 3px;border-radius:9px;border:2px solid ${border};background:${bg};cursor:pointer;text-align:center;font-family:inherit;position:relative">
+        ${actuel?`<div style="position:absolute;top:-6px;left:50%;transform:translateX(-50%);background:#1e3a5f;color:white;border-radius:20px;padding:1px 6px;font-size:8px;font-weight:700;white-space:nowrap">Actuel</div>`:''}
+        <div style="font-size:13px;color:${color}">${icon}</div>
+        <div style="font-size:11px;font-weight:800;color:${color}">${m}</div>
+        <div style="font-size:9px;color:${color};opacity:.8">${sel.frais}</div>
+      </button>`;}).join('')}
+    </div>
+  </div>`:`<div class="card" style="display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:14px;min-height:200px">← Sélectionnez un élève</div>`}
+  </div>`;
+}
+
+// ─── ALERTES ──────────────────────────────────────────────────────────────────
+function renderAlertes(){
+  const C={critique:'#b91c1c',moyen:'#b45309',faible:'#1d4ed8'};
+  const B={critique:'#fee2e2',moyen:'#fef3c7',faible:'#dbeafe'};
+  const I={critique:'🚨',moyen:'⚠️',faible:'ℹ️'};
+  const jl=S.config.jourLimite;
+  const al=ELEVES_DATA.map(e=>{
+    const p=S.paiements[e.id];if(!p)return null;
+    // Seulement les mois réellement en retard (passés ou actuel si délai dépassé)
+    const mi=MOIS.filter(m=>isEnRetard(m,p.mois[m]||'impayé',jl));
+    const inscI=p.inscr==='impayé';
+    if(!inscI&&mi.length===0)return null;
+    const mt=mi.length*e.frais+(inscI?e.inscr:0);
+    const nv=mi.length>3||inscI?'critique':mi.length>1?'moyen':'faible';
+    return{...e,mi,inscI,mt,nv};
+  }).filter(Boolean).sort((a,b)=>b.mt-a.mt);
+  return renderLegende()+`<div class="card" style="margin-bottom:14px"><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px">${Object.entries({critique:'Inscription impayée ou +3 mois',moyen:'2-3 mois impayés',faible:'1 mois impayé'}).map(([nv,d])=>`<div style="background:${B[nv]};border-radius:9px;padding:10px;border:1px solid ${C[nv]}33"><div style="display:flex;align-items:center;gap:5px;margin-bottom:3px"><span style="font-size:15px">${I[nv]}</span><span style="font-weight:700;font-size:12px;color:${C[nv]}">${nv.charAt(0).toUpperCase()+nv.slice(1)}</span></div><div style="font-size:11px;color:#475569">${d}</div></div>`).join('')}</div><div style="font-size:12px;color:#64748b">📅 Date limite : <b style="color:#1a1a2e">le ${S.config.jourLimite} du mois</b></div></div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px">${['critique','moyen','faible'].map(nv=>{const n=al.filter(a=>a.nv===nv).length;const m=al.filter(a=>a.nv===nv).reduce((s,a)=>s+a.mt,0);return`<div style="background:white;border-radius:11px;padding:13px;box-shadow:0 2px 8px rgba(0,0,0,.05);border-left:4px solid ${C[nv]};display:flex;align-items:center;gap:9px"><span style="font-size:20px">${I[nv]}</span><div><div style="font-size:18px;font-weight:800;color:${C[nv]}">${n}</div><div style="font-size:11px;color:#64748b">${m.toLocaleString()} MAD</div></div></div>`;}).join('')}</div>
+  <div style="display:grid;gap:9px">${al.map(e=>`<div style="background:white;border-radius:11px;padding:12px 15px;box-shadow:0 2px 8px rgba(0,0,0,.05);border-left:4px solid ${C[e.nv]};display:flex;align-items:center;gap:11px"><div style="width:38px;height:38px;border-radius:10px;background:${B[e.nv]};display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0">${I[e.nv]}</div><div style="flex:1"><div style="font-weight:700;color:#1a1a2e;font-size:13px">${e.nom} <span style="color:#94a3b8;font-weight:400;font-size:11px">· ${e.mat} · ${e.classe}</span></div><div style="font-size:11px;color:#64748b">${e.tuteur} · ${e.tel}</div><div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">${e.inscI?`<span style="background:${B[e.nv]};color:${C[e.nv]};border-radius:20px;padding:2px 7px;font-size:10px;font-weight:700">Inscription</span>`:''}${e.mi.map(m=>`<span style="background:${B[e.nv]};color:${C[e.nv]};border-radius:20px;padding:2px 7px;font-size:10px;font-weight:700">${m}</span>`).join('')}</div></div><div style="text-align:right;flex-shrink:0"><div style="font-size:14px;font-weight:800;color:${C[e.nv]}">${e.mt.toLocaleString()} MAD</div></div></div>`).join('')}${al.length===0?`<div style="text-align:center;color:#22c55e;padding:36px;font-size:14px;font-weight:700">🎉 Tous les paiements sont à jour !</div>`:''}</div>`;
+}
+
+// ─── RAPPORT ──────────────────────────────────────────────────────────────────
+function renderRapport(){
+  const tr=ELEVES_DATA.reduce((s,e)=>{const p=S.paiements[e.id];if(!p)return s;return s+(p.inscr==='payé'?e.inscr:0)+MOIS.reduce((ms,m)=>ms+(p.mois?.[m]==='payé'?e.frais:0),0);},0);
+  const ta=ELEVES_DATA.reduce((s,e)=>s+e.inscr+MOIS.length*e.frais,0);
+  return renderLegende()+`<div class="card" style="margin-bottom:14px"><div style="font-weight:800;font-size:15px;color:#1a1a2e;margin-bottom:12px">📥 Rapport complet</div>
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:13px;border-radius:9px;border:1.5px solid #86efac;background:#f0fdf4">
+    <div><div style="font-weight:700;color:#15803d;font-size:13px">Rapport annuel 2024-2025</div><div style="font-size:11px;color:#64748b;margin-top:2px">${tr.toLocaleString()} / ${ta.toLocaleString()} MAD perçus</div></div>
+    <button onclick="dlCSV()" style="padding:9px 18px;border-radius:8px;border:none;background:#15803d;color:white;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit">⬇ Télécharger CSV</button>
+  </div></div>
+  <div class="card" style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:11px;min-width:680px"><thead><tr style="background:#1e3a5f"><th style="padding:9px 10px;color:white;text-align:left">Matricule</th><th style="padding:9px 12px;color:white;text-align:left">Élève</th><th style="padding:9px 7px;color:white;text-align:center">Inscr.</th>${MOIS.map(m=>`<th style="padding:9px 4px;color:white;text-align:center;min-width:32px">${m}</th>`).join('')}<th style="padding:9px 11px;color:white;text-align:right">Reçu</th></tr></thead><tbody>${ELEVES_DATA.map((e,i)=>{const p=S.paiements[e.id]||{};const at=e.inscr+MOIS.length*e.frais;const rc=(p.inscr==='payé'?e.inscr:0)+MOIS.reduce((s,m)=>s+(p.mois?.[m]==='payé'?e.frais:0),0);return`<tr style="border-bottom:1px solid #f1f5f9;background:${i%2===0?'white':'#f8fafc'}"><td style="padding:8px 10px"><span style="color:#6366f1;font-weight:700;font-size:10px">${e.mat}</span></td><td style="padding:8px 12px;font-weight:600;color:#1a1a2e">${e.nom}</td><td style="padding:8px;text-align:center"><span style="display:inline-block;width:20px;height:20px;border-radius:5px;background:${p.inscr==='payé'?'#dcfce7':'#fee2e2'};color:${p.inscr==='payé'?'#15803d':'#b91c1c'};font-size:11px;line-height:20px;font-weight:800;text-align:center">${p.inscr==='payé'?'✓':'✗'}</span></td>${MOIS.map(m=>{const ok=p.mois?.[m]==='payé';return`<td style="padding:8px 3px;text-align:center"><span style="display:inline-block;width:20px;height:20px;border-radius:5px;background:${ok?'#dcfce7':'#fee2e2'};color:${ok?'#15803d':'#b91c1c'};font-size:11px;line-height:20px;font-weight:800;text-align:center">${ok?'✓':'✗'}</span></td>`;}).join('')}<td style="padding:8px 11px;text-align:right;font-weight:800;color:${rc>=at?'#15803d':'#b91c1c'}">${rc.toLocaleString()}</td></tr>`;}).join('')}</tbody></table></div>`;
+}
+
+// ─── ÉLÈVES ───────────────────────────────────────────────────────────────────
+function renderEleves(){
+  const preview=S.importPreview;
+  return `
+  <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
+    <h2 style="font-size:18px;font-weight:800;color:#1a1a2e;margin:0">🧑‍🎓 Élèves (${ELEVES_DATA.length})</h2>
+    <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
+      <button onclick="dlModele()" style="padding:8px 14px;border-radius:9px;border:1.5px solid #bae6fd;background:#f0f9ff;color:#0369a1;font-weight:700;font-size:12px;cursor:pointer;font-family:inherit">⬇ Modèle Excel</button>
+      <label style="padding:8px 14px;border-radius:9px;border:1.5px solid #6366f1;background:#eef2ff;color:#6366f1;font-weight:700;font-size:12px;cursor:pointer">
+        ⬆ Importer .xlsx / .csv
+        <input type="file" accept=".xlsx,.xls,.csv" onchange="lireFichier(this)" style="display:none"/>
+      </label>
+    </div>
+  </div>
+
+  ${preview ? `
+  <div style="background:white;border-radius:14px;padding:18px;box-shadow:0 2px 10px rgba(0,0,0,.06);margin-bottom:14px;border:2px solid #6366f1">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+      <div>
+        <div style="font-weight:800;font-size:15px;color:#1a1a2e">Aperçu import — ${preview.length} élève(s)</div>
+        <div style="font-size:12px;color:#64748b;margin-top:2px">Vérifiez les données avant de confirmer</div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button onclick="S.importPreview=null;S.importMode=null;render()" style="padding:8px 14px;border-radius:8px;border:1.5px solid #e2e8f0;background:white;color:#64748b;font-weight:700;font-size:12px;cursor:pointer;font-family:inherit">Annuler</button>
+        <button onclick="confirmerImport('ajouter')" style="padding:8px 14px;border-radius:8px;border:none;background:#0ea5e9;color:white;font-weight:700;font-size:12px;cursor:pointer;font-family:inherit">+ Ajouter aux existants</button>
+        <button onclick="confirmerImport('remplacer')" style="padding:8px 14px;border-radius:8px;border:none;background:#6366f1;color:white;font-weight:700;font-size:12px;cursor:pointer;font-family:inherit">↺ Remplacer toute la liste</button>
+      </div>
+    </div>
+    <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="background:#6366f1">${['Matricule','Nom','Classe','Tuteur','Tél','Frais/mois','Inscription'].map(h=>`<th style="padding:8px 12px;color:white;text-align:left;font-size:11px;font-weight:600">${h}</th>`).join('')}</tr></thead>
+      <tbody>${preview.map((e,i)=>`<tr style="border-bottom:1px solid #f1f5f9;background:${i%2===0?'white':'#fafbff'}">
+        <td style="padding:7px 12px"><span style="background:#eef2ff;color:#6366f1;border-radius:5px;padding:2px 7px;font-size:10px;font-weight:700">${e.mat||'—'}</span></td>
+        <td style="padding:7px 12px;font-weight:600;color:#1a1a2e">${e.nom}</td>
+        <td style="padding:7px 12px">${badge(e.classe||'—','#0369a1','#f0f9ff')}</td>
+        <td style="padding:7px 12px;font-size:11px;color:#475569">${e.tuteur||'—'}</td>
+        <td style="padding:7px 12px;font-size:11px;color:#64748b">${e.tel||'—'}</td>
+        <td style="padding:7px 12px;font-weight:700">${e.frais||0} MAD</td>
+        <td style="padding:7px 12px;font-weight:700">${e.inscr||0} MAD</td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+  </div>` : ''}
+
+  <div class="card"><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px">
+    <thead><tr style="background:#1e3a5f">${['Matricule','Nom','Classe','Tuteur','Tél','Frais/mois','Inscr.','Statut'].map(h=>`<th style="padding:9px 12px;color:white;text-align:left;font-size:11px;font-weight:600">${h}</th>`).join('')}</tr></thead>
+    <tbody>${ELEVES_DATA.map((e,i)=>{const p=S.paiements[e.id];const nbI=p?MOIS.filter(m=>p.mois[m]==='impayé').length:MOIS.length;const ok=p?.inscr==='payé'&&nbI===0;return`<tr style="border-bottom:1px solid #f1f5f9;background:${i%2===0?'white':'#fafbff'}">
+      <td style="padding:8px 12px"><span style="background:#eef2ff;color:#6366f1;border-radius:5px;padding:2px 7px;font-size:10px;font-weight:700">${e.mat}</span></td>
+      <td style="padding:8px 12px;font-weight:600;color:#1a1a2e">${e.nom}</td>
+      <td style="padding:8px 12px">${badge(e.classe,'#0369a1','#f0f9ff')}</td>
+      <td style="padding:8px 12px;font-size:11px;color:#475569">${e.tuteur}</td>
+      <td style="padding:8px 12px;font-size:11px;color:#64748b">${e.tel}</td>
+      <td style="padding:8px 12px;font-weight:700">${e.frais} MAD</td>
+      <td style="padding:8px 12px;font-weight:700">${e.inscr} MAD</td>
+      <td style="padding:8px 12px">${ok?badge('✓ À jour','#15803d','#dcfce7'):badge('✗ '+nbI+' impayé(s)','#b91c1c','#fee2e2')}</td>
+    </tr>`;}).join('')}</tbody>
+  </table></div></div>`;
+}
+
+// ─── PARAMS ───────────────────────────────────────────────────────────────────
+function renderParams(){
+  const j=S.config.jourLimite;const td=new Date().getDate();
+  return `<div class="card"><div style="font-size:15px;font-weight:800;color:#1a1a2e;margin-bottom:5px">📅 Date limite de paiement</div><p style="font-size:12px;color:#64748b;margin-bottom:16px">Après ce jour, un élève non payé est en retard.</p>
+  <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px"><input type="range" min="1" max="28" step="1" value="${j}" oninput="S.config.jourLimite=+this.value;render()" style="flex:1;border:none;padding:0"/><div style="width:56px;height:56px;border-radius:12px;background:#f0f9ff;border:2px solid #0ea5e9;display:flex;flex-direction:column;align-items:center;justify-content:center"><div style="font-size:22px;font-weight:800;color:#0ea5e9;line-height:1">${j}</div><div style="font-size:9px;color:#0ea5e9;font-weight:700">du mois</div></div></div>
+  <div style="background:#f8fafc;border-radius:9px;padding:11px;border:1px solid #e2e8f0"><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">${[1,j,j+1,28].filter((v,i,a)=>a.indexOf(v)===i&&v>=1&&v<=28).sort((a,b)=>a-b).map(d=>{const late=d>j;const isT=d===td;return`<div style="border-radius:7px;padding:8px;background:${late?'#fee2e2':isT?'#fffbeb':'#dcfce7'};border:1px solid ${late?'#fca5a5':isT?'#fbbf24':'#86efac'};text-align:center"><div style="font-size:12px;font-weight:800;color:${late?'#b91c1c':isT?'#d97706':'#15803d'}">Jour ${d}</div><div style="font-size:9px;font-weight:700;color:${late?'#b91c1c':isT?'#d97706':'#15803d'}">${isT?'← auj.':late?'✗ Retard':'✓ OK'}</div></div>`;}).join('')}</div></div></div>`;
+}
+
+// ─── SUPER ADMIN ──────────────────────────────────────────────────────────────
+function renderAdmin(){
+  const stabs=[['ecoles','🏫 Vue écoles'],['creer','➕ Créer'],['comptes','👥 Comptes'],['debug','🔧 Diagnostic']];
+  return `<div style="margin-bottom:16px"><h2 style="font-size:20px;font-weight:800;color:#1a1a2e">Super Admin ⚡</h2><p style="font-size:12px;color:#64748b;margin-top:3px">${S.ecoles.length} écoles · ${S.ecoles.reduce((s,e)=>s+e.mrr,0).toLocaleString()} MAD/mois · ${S.users.filter(u=>u.role!=='superadmin').length} utilisateurs</p></div>
+  <div style="display:flex;gap:3px;background:white;border-radius:12px;padding:5px;margin-bottom:18px;box-shadow:0 2px 8px rgba(0,0,0,.05);flex-wrap:wrap">
+    ${stabs.map(([id,l])=>`<button onclick="S.adminSub='${id}';S.selEcole=null;render()" style="flex:1;padding:9px 8px;border:none;cursor:pointer;border-radius:9px;font-family:inherit;font-size:12px;font-weight:${S.adminSub===id?700:500};background:${S.adminSub===id?'#1e3a5f':'transparent'};color:${S.adminSub===id?'white':'#64748b'}">${l}</button>`).join('')}
+  </div>
+  ${S.adminSub==='ecoles' ?renderAdminEcoles():'' }
+  ${S.adminSub==='creer'  ?renderAdminCreer() :'' }
+  ${S.adminSub==='comptes'?renderAdminComptes():'' }
+  ${S.adminSub==='debug'  ?renderAdminDebug() :'' }`;
+}
+
+function renderAdminEcoles(){
+  // Fiche école
+  if(S.selEcole){
+    const ec=S.ecoles.find(e=>e.id===S.selEcole);if(!ec)return'';
+    const dir=S.users.find(u=>u.ecole===ec.nom&&u.role==='directeur');
+    const assists=S.users.filter(u=>u.ecole===ec.nom&&u.role==='admin');
+    const profs=S.users.filter(u=>u.ecole===ec.nom&&u.role==='prof');
+    const classes=['CP-A','CE1-A','CE1-B','CM1-A','CM1-B','6ème-A','6ème-B','3ème-A'];
+    const niveaux=[...new Set(classes.map(c=>c.split('-')[0]))];
+    const nbu=S.users.filter(u=>u.ecole===ec.nom).length;
+    return `
+    <button onclick="S.selEcole=null;render()" style="margin-bottom:14px;padding:7px 14px;border-radius:8px;border:1px solid #e2e8f0;background:white;cursor:pointer;font-family:inherit;font-size:12px;font-weight:600;color:#64748b">← Retour</button>
+    <div class="card" style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:13px;margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid #f1f5f9">
+        <div style="width:50px;height:50px;border-radius:14px;background:${FB[ec.forfait]||'#eef2ff'};display:flex;align-items:center;justify-content:center;font-weight:800;font-size:18px;color:${FC[ec.forfait]||'#6366f1'};flex-shrink:0">${ec.nom.split(' ').map(w=>w[0]).join('').slice(0,2)}</div>
+        <div style="flex:1"><div style="font-size:17px;font-weight:800;color:#1a1a2e">${ec.nom}</div><div style="font-size:12px;color:#64748b;margin-top:2px">${ec.ville} · Directeur : ${dir?dir.nom:'Non assigné'}</div></div>
+        <div style="display:flex;gap:7px">${badge(ec.forfait,FC[ec.forfait]||'#6366f1',FB[ec.forfait]||'#eef2ff')}${badge(ec.status,SC[ec.status]||'#64748b')}</div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
+        ${[{ic:'🧑‍🎓',l:'Élèves',v:ec.eleves,c:'#0ea5e9'},{ic:'📚',l:'Niveaux',v:niveaux.length,c:'#6366f1'},{ic:'🏫',l:'Classes',v:classes.length,c:'#22c55e'},{ic:'👥',l:'Utilisateurs',v:nbu,c:'#f59e0b'}].map(c=>`<div style="background:#f8fafc;border-radius:10px;padding:11px;border-left:3px solid ${c.c};text-align:center"><div style="font-size:18px">${c.ic}</div><div style="font-size:18px;font-weight:800;color:#1a1a2e;margin-top:3px">${c.v}</div><div style="font-size:11px;color:#64748b">${c.l}</div></div>`).join('')}
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+      <div class="card">
+        <div style="font-size:11px;font-weight:700;color:#94a3b8;letter-spacing:1px;margin-bottom:11px">ÉQUIPE</div>
+        ${dir?`<div style="display:flex;align-items:center;gap:9px;padding:9px 11px;border-radius:9px;background:#f0f9ff;border:1px solid #bae6fd;margin-bottom:7px">${av(dir.avatar,'#0ea5e9',30)}<div style="flex:1"><div style="font-weight:600;font-size:12px;color:#1a1a2e">${dir.nom}</div><div style="font-size:10px;color:#64748b">Directeur · login: ${dir.login} · mdp: ${dir.mdp}</div></div>${badge('DIR','#1e40af','#dbeafe')}</div>`:`<div style="background:#fff5f5;border-radius:8px;padding:10px;font-size:12px;color:#b91c1c;font-weight:600;margin-bottom:7px">⚠️ Aucun directeur assigné</div>`}
+        ${assists.map(u=>`<div style="display:flex;align-items:center;gap:9px;padding:9px 11px;border-radius:9px;background:#f0fdf4;border:1px solid #86efac;margin-bottom:6px">${av(u.avatar,'#22c55e',30)}<div style="flex:1"><div style="font-weight:600;font-size:12px;color:#1a1a2e">${u.nom}</div><div style="font-size:10px;color:#64748b">Assistante · login: ${u.login} · mdp: ${u.mdp}</div></div>${badge('ASSIST','#166534','#dcfce7')}</div>`).join('')}
+        ${profs.map(u=>`<div style="display:flex;align-items:center;gap:9px;padding:9px 11px;border-radius:9px;background:#fffbeb;border:1px solid #fde68a;margin-bottom:6px">${av(u.avatar,'#f59e0b',30)}<div style="flex:1"><div style="font-weight:600;font-size:12px;color:#1a1a2e">${u.nom}</div><div style="font-size:10px;color:#64748b">Prof · login: ${u.login} · mdp: ${u.mdp}</div></div>${badge('PROF','#92400e','#fef3c7')}</div>`).join('')}
+        ${!dir&&!assists.length&&!profs.length?`<div style="font-size:12px;color:#94a3b8;text-align:center;padding:14px">Aucun utilisateur</div>`:''}
+      </div>
+      <div class="card">
+        <div style="font-size:11px;font-weight:700;color:#94a3b8;letter-spacing:1px;margin-bottom:11px">STRUCTURE SCOLAIRE</div>
+        ${niveaux.map(nv=>{const cls=classes.filter(c=>c.startsWith(nv));return`<div style="margin-bottom:10px"><div style="font-weight:700;font-size:12px;color:#1a1a2e;margin-bottom:5px">${nv}</div><div style="display:flex;gap:5px;flex-wrap:wrap">${cls.map(c=>`<span style="background:#eef2ff;color:#6366f1;border-radius:8px;padding:4px 10px;font-size:11px;font-weight:600">${c}</span>`).join('')}</div></div>`;}).join('')}
+      </div>
+    </div>
+    <div class="card">
+      <div style="font-size:11px;font-weight:700;color:#94a3b8;letter-spacing:1px;margin-bottom:11px">LISTE DES ÉLÈVES</div>
+      <div style="display:grid;gap:6px">
+        ${ELEVES_DATA.map(e=>`<div style="display:flex;align-items:center;gap:9px;padding:9px 12px;border-radius:9px;background:#f8fafc;border:1px solid #e2e8f0">${av(e.nom.split(' ').map(n=>n[0]).join('').slice(0,2),'#6366f1',30)}<div style="flex:1"><div style="font-weight:600;font-size:12px;color:#1a1a2e">${e.nom}</div><div style="font-size:10px;color:#64748b">${e.mat} · ${e.classe} · ${e.tuteur} · ${e.tel}</div></div><span style="background:#eef2ff;color:#6366f1;border-radius:20px;padding:2px 9px;font-size:11px;font-weight:700">${e.frais} MAD/m</span></div>`).join('')}
+      </div>
+    </div>`;
+  }
+
+  // Liste écoles
+  const totalMRR=S.ecoles.reduce((s,e)=>s+e.mrr,0);
+  return `
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:11px;margin-bottom:16px">
+    ${[{ic:'💰',l:'MRR total',v:totalMRR.toLocaleString()+' MAD',c:'#22c55e'},{ic:'🏫',l:'Écoles',v:S.ecoles.filter(e=>e.status==='actif').length+' actives / '+S.ecoles.length,c:'#6366f1'},{ic:'🧑‍🎓',l:'Élèves suivis',v:S.ecoles.reduce((s,e)=>s+e.eleves,0),c:'#0ea5e9'}].map(c=>`<div style="background:white;border-radius:12px;padding:13px;box-shadow:0 2px 8px rgba(0,0,0,.05);border-left:4px solid ${c.c};display:flex;align-items:center;gap:9px"><div style="width:36px;height:36px;border-radius:9px;background:${c.c}18;display:flex;align-items:center;justify-content:center;font-size:17px">${c.ic}</div><div><div style="font-size:16px;font-weight:800;color:#1a1a2e">${c.v}</div><div style="font-size:11px;color:#64748b">${c.l}</div></div></div>`).join('')}
+  </div>
+  <div style="display:grid;gap:9px">
+    ${S.ecoles.map(ec=>{
+      const dir=S.users.find(u=>u.ecole===ec.nom&&u.role==='directeur');
+      const nbu=S.users.filter(u=>u.ecole===ec.nom).length;
+      return`<div onclick="S.selEcole=${ec.id};render()" style="background:white;border-radius:13px;padding:15px 18px;box-shadow:0 2px 10px rgba(0,0,0,.06);cursor:pointer;border:1.5px solid transparent" onmouseover="this.style.borderColor='#6366f1'" onmouseout="this.style.borderColor='transparent'">
+        <div style="display:flex;align-items:center;gap:13px">
+          <div style="width:46px;height:46px;border-radius:13px;background:${FB[ec.forfait]||'#eef2ff'};display:flex;align-items:center;justify-content:center;font-weight:800;font-size:17px;color:${FC[ec.forfait]||'#6366f1'};flex-shrink:0">${ec.nom.split(' ').map(w=>w[0]).join('').slice(0,2)}</div>
+          <div style="flex:1">
+            <div style="font-size:15px;font-weight:800;color:#1a1a2e">${ec.nom}</div>
+            <div style="font-size:11px;color:#64748b;margin-top:2px">${ec.ville} · ${dir?'Dir: '+dir.nom:'Pas de directeur'} · ${ec.eleves} élèves · ${nbu} utilisateur(s)</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:7px;flex-shrink:0">
+            <div style="text-align:right"><div style="font-weight:800;font-size:14px;color:#22c55e">${ec.mrr} MAD/m</div></div>
+            ${badge(ec.forfait,FC[ec.forfait]||'#6366f1',FB[ec.forfait]||'#eef2ff')}
+            ${badge(ec.status,SC[ec.status]||'#64748b')}
+            <span style="color:#94a3b8;font-size:18px">›</span>
+          </div>
+        </div>
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function renderAdminCreer(){
+  const msg_ec=S._msg_ec||'';const msg_us=S._msg_us||'';
+  return `<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+  <div class="card">
+    <div style="font-size:14px;font-weight:800;color:#1a1a2e;margin-bottom:14px">🏫 Créer une nouvelle école</div>
+    <div style="display:grid;gap:9px">
+      <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px">Nom de l'école *</label><input id="f_nom_e" placeholder="Ex: École Ibn Sina"/></div>
+      <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px">Ville</label><input id="f_ville" placeholder="Ex: Casablanca"/></div>
+      <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px">Forfait</label><select id="f_forfait"><option value="starter">Starter — 199 MAD/mois</option><option value="académique">Académique — 399 MAD/mois</option><option value="complet">Complet — 699 MAD/mois</option></select></div>
+      <div style="border-top:1px solid #f1f5f9;padding-top:10px;font-size:11px;font-weight:700;color:#94a3b8;letter-spacing:1px;margin-top:2px">COMPTE DIRECTEUR</div>
+      <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px">Nom du directeur</label><input id="f_nom_d" placeholder="Ex: Ahmed Berrada"/></div>
+      <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px">Login *</label><input id="f_log_d" placeholder="Ex: dir_ibnsina"/></div>
+      <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px">Mot de passe</label><input id="f_mdp_d" type="password" placeholder="Laisser vide = dir123"/></div>
+      <button onclick="doCreerEcole()" style="padding:11px;border-radius:9px;border:none;background:#1e3a5f;color:white;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit;margin-top:4px">✅ Créer l'école + compte directeur</button>
+      ${msg_ec?`<div style="background:#dcfce7;color:#15803d;border-radius:8px;padding:9px 12px;font-size:12px;font-weight:600">${msg_ec}</div>`:''}
+    </div>
+  </div>
+  <div class="card">
+    <div style="font-size:14px;font-weight:800;color:#1a1a2e;margin-bottom:14px">👤 Ajouter un utilisateur</div>
+    <div style="display:grid;gap:9px">
+      <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px">Nom complet *</label><input id="u_nom" placeholder="Ex: Samira Benali"/></div>
+      <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px">Login *</label><input id="u_login" placeholder="Ex: samira_b"/></div>
+      <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px">Mot de passe</label><input id="u_mdp" type="password" placeholder="Laisser vide = pass123"/></div>
+      <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px">Rôle</label>
+        <select id="u_role"><option value="directeur">🎓 Directeur</option><option value="admin" selected>👩‍💼 Assistante</option><option value="prof">📚 Professeur</option></select>
+      </div>
+      <div><label style="font-size:11px;font-weight:700;color:#64748b;display:block;margin-bottom:3px">École *</label>
+        <select id="u_ecole"><option value="">-- Choisir --</option>${S.ecoles.map(e=>`<option value="${e.nom}">${e.nom}</option>`).join('')}</select>
+      </div>
+      <button onclick="doCreerUser()" style="padding:11px;border-radius:9px;border:none;background:#15803d;color:white;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit;margin-top:4px">✅ Créer l'accès</button>
+      ${msg_us?`<div style="background:#dcfce7;color:#15803d;border-radius:8px;padding:9px 12px;font-size:12px;font-weight:600">${msg_us}</div>`:''}
+    </div>
+  </div></div>`;
+}
+
+function renderAdminComptes(){
+  const actif=S.filtreRole||'tous';
+  const list=S.users.filter(u=>u.role!=='superadmin'&&(actif==='tous'||u.role===actif));
+  return `<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin-bottom:16px">
+    ${[['tous','Tous'],['directeur','Directeurs'],['admin','Assistantes'],['prof','Professeurs']].map(([v,l])=>`<button onclick="S.filtreRole='${v}';render()" style="padding:10px;border-radius:10px;border:none;cursor:pointer;font-family:inherit;font-size:12px;font-weight:700;background:${actif===v?'#1e3a5f':'white'};color:${actif===v?'white':'#64748b'};box-shadow:0 2px 6px rgba(0,0,0,.05)">${l} <span style="font-weight:400;opacity:.6">(${v==='tous'?S.users.filter(u=>u.role!=='superadmin').length:S.users.filter(u=>u.role===v).length})</span></button>`).join('')}
+  </div>
+  <div class="card" style="overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:600px">
+      <thead><tr style="background:#1e3a5f">${['Utilisateur','Rôle','École','Login','Mot de passe','Action'].map(h=>`<th style="padding:10px 12px;color:white;text-align:left;font-size:11px;font-weight:600">${h}</th>`).join('')}</tr></thead>
+      <tbody>
+        ${list.map((u,i)=>`<tr style="border-bottom:1px solid #f1f5f9;background:${i%2===0?'white':'#fafbff'}">
+          <td style="padding:9px 12px"><div style="display:flex;align-items:center;gap:8px">${av(u.avatar,u.role==='directeur'?'#0ea5e9':u.role==='prof'?'#f59e0b':'#22c55e',28)}<span style="font-weight:600;color:#1a1a2e">${u.nom}</span></div></td>
+          <td style="padding:9px 12px">${badge((RC[u.role]?.ic||'')+' '+u.role,RC[u.role]?.tx||'#64748b',RC[u.role]?.bg||'#f1f5f9')}</td>
+          <td style="padding:9px 12px;color:#64748b;font-size:11px">${u.ecole||'—'}</td>
+          <td style="padding:9px 12px"><code style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:5px;padding:2px 7px;font-size:11px;color:#475569">${u.login}</code></td>
+          <td style="padding:9px 12px"><code style="background:#fffbeb;border:1px solid #fde68a;border-radius:5px;padding:2px 7px;font-size:11px;color:#92400e">${u.mdp}</code></td>
+          <td style="padding:9px 12px"><button onclick="delUser(${u.id})" style="padding:4px 10px;border-radius:6px;border:1px solid #fca5a5;background:#fff5f5;color:#b91c1c;font-size:11px;cursor:pointer;font-family:inherit;font-weight:600">🗑️</button></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function renderAdminDebug(){
+  const checks=[
+    {l:'Écoles sans directeur',     ic:'⚠️',c:'#b45309',bg:'#fef3c7',v:S.ecoles.filter(e=>!S.users.find(u=>u.ecole===e.nom&&u.role==='directeur')).map(e=>e.nom).join(', ')||'✅ Aucun problème'},
+    {l:'Logins dupliqués',          ic:'🔴',c:'#b91c1c',bg:'#fee2e2',v:(()=>{const l=S.users.map(u=>u.login);const d=l.filter((x,i)=>l.indexOf(x)!==i);return d.length?d.join(', '):'✅ Aucun doublon';})()},
+    {l:'Écoles sans élèves',        ic:'ℹ️',c:'#1d4ed8',bg:'#dbeafe',v:S.ecoles.filter(e=>e.eleves===0).map(e=>e.nom+' ('+e.status+')').join(', ')||'✅ Toutes les écoles ont des élèves'},
+    {l:'Comptes sans école assignée',ic:'⚠️',c:'#b45309',bg:'#fef3c7',v:S.users.filter(u=>u.role!=='superadmin'&&!u.ecole).map(u=>u.nom).join(', ')||'✅ Tous les comptes ont une école'},
+    {l:'Répartition des forfaits',  ic:'📊',c:'#166534',bg:'#dcfce7',v:['starter','académique','complet'].map(f=>f+': '+S.ecoles.filter(e=>e.forfait===f).length+' école(s) ('+S.ecoles.filter(e=>e.forfait===f).reduce((s,e)=>s+e.mrr,0)+' MAD/m)').join(' · ')},
+    {l:'Utilisateurs actifs',       ic:'✅',c:'#166534',bg:'#dcfce7',v:S.users.filter(u=>u.role!=='superadmin').length+' comptes — '+S.users.filter(u=>u.role==='directeur').length+' dir · '+S.users.filter(u=>u.role==='admin').length+' assist · '+S.users.filter(u=>u.role==='prof').length+' profs'},
+  ];
+  return `<div style="margin-bottom:14px"><div style="font-size:14px;font-weight:800;color:#1a1a2e;margin-bottom:3px">🔧 Diagnostic système</div><p style="font-size:12px;color:#64748b">Vérifications automatiques pour gérer à distance</p></div>
+  <div style="display:grid;gap:9px;margin-bottom:16px">
+    ${checks.map(c=>`<div style="background:white;border-radius:11px;padding:13px 15px;box-shadow:0 2px 8px rgba(0,0,0,.05);border-left:4px solid ${c.c};display:flex;align-items:flex-start;gap:11px">
+      <div style="width:36px;height:36px;border-radius:9px;background:${c.bg};display:flex;align-items:center;justify-content:center;font-size:17px;flex-shrink:0">${c.ic}</div>
+      <div style="flex:1"><div style="font-weight:700;font-size:13px;color:#1a1a2e;margin-bottom:3px">${c.l}</div><div style="font-size:12px;color:${c.v.startsWith('✅')?'#166534':c.c};font-weight:${c.v.startsWith('✅')?600:400}">${c.v}</div></div>
+    </div>`).join('')}
+  </div>
+  <div style="background:#f8fafc;border-radius:11px;padding:14px;border:1px solid #e2e8f0">
+    <div style="font-weight:700;font-size:13px;color:#1a1a2e;margin-bottom:10px">📋 Résumé</div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+      ${[['🏫','Écoles',S.ecoles.length],['👥','Utilisateurs',S.users.filter(u=>u.role!=='superadmin').length],['💰','MRR',S.ecoles.reduce((s,e)=>s+e.mrr,0).toLocaleString()+' MAD'],['📈','ARR',(S.ecoles.reduce((s,e)=>s+e.mrr,0)*12/1000).toFixed(0)+'k MAD']].map(([ic,l,v])=>`<div style="background:white;border-radius:8px;padding:10px;text-align:center;border:1px solid #e2e8f0"><div style="font-size:18px">${ic}</div><div style="font-size:15px;font-weight:800;color:#1a1a2e;margin-top:3px">${v}</div><div style="font-size:10px;color:#64748b">${l}</div></div>`).join('')}
+    </div>
+  </div>`;
+}
+
+// ─── ACTIONS ──────────────────────────────────────────────────────────────────
+function doCreerEcole(){
+  const nom=document.getElementById('f_nom_e')?.value||'';
+  const ville=document.getElementById('f_ville')?.value||'';
+  const forfait=document.getElementById('f_forfait')?.value||'starter';
+  const nomD=document.getElementById('f_nom_d')?.value||'';
+  const logD=document.getElementById('f_log_d')?.value||'';
+  const mdpD=document.getElementById('f_mdp_d')?.value||'dir123';
+  if(!nom||!logD){S._msg_ec='⚠️ Nom de l\'école et login directeur obligatoires';render();return;}
+  const id=S.ecoles.length>0?Math.max(...S.ecoles.map(e=>e.id))+1:10;
+  const mrr={starter:199,académique:399,complet:699}[forfait]||199;
+  const newEcole={id,nom,ville,forfait,mrr,status:'actif',eleves:0};
+  S.ecoles.push(newEcole);
+  sbSaveEcole({nom,ville,forfait,mrr,status:'actif',eleves:0});
+  const uid=S.users.length>0?Math.max(...S.users.map(u=>u.id))+1:10;
+  S.users.push({id:uid,nom:nomD||nom,role:'directeur',login:logD,mdp:mdpD||'dir123',avatar:(nomD||nom).slice(0,2).toUpperCase(),ecole:nom});
+  S._msg_ec='✅ École "'+nom+'" créée ! Login directeur : '+logD;
+  render();
+}
+function doCreerUser(){
+  const nom=document.getElementById('u_nom')?.value||'';
+  const login=document.getElementById('u_login')?.value||'';
+  const mdp=document.getElementById('u_mdp')?.value||'pass123';
+  const role=document.getElementById('u_role')?.value||'admin';
+  const ecole=document.getElementById('u_ecole')?.value||'';
+  if(!nom||!login||!ecole){S._msg_us='⚠️ Nom, login et école obligatoires';render();return;}
+  const uid=S.users.length>0?Math.max(...S.users.map(u=>u.id))+1:10;
+  const newUser={id:uid,nom,role,login,mdp:mdp||'pass123',avatar:nom.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase(),ecole};
+  S.users.push(newUser);
+  sbSaveUser({nom,role,login,mdp:mdp||'pass123',avatar:newUser.avatar,ecole});
+  S._msg_us='✅ Compte "'+login+'" créé avec succès !';
+  render();
+}
+function delUser(id){S.users=S.users.filter(u=>u.id!==id);render();}
+function tMois(id,m){
+  const p=S.paiements[id];if(!p)return;
+  p.mois[m]=p.mois[m]==='payé'?'impayé':'payé';
+  sbSavePaiement(id, m, p.mois[m], S.user?.ecole||'');
+  render();
+}
+function tInscr(id){
+  const p=S.paiements[id];if(!p)return;
+  p.inscr=p.inscr==='payé'?'impayé':'payé';
+  sbSaveInscr(id, p.inscr, S.user?.ecole||'');
+  render();
+}
+function mTout(id,st){
+  const p=S.paiements[id];if(!p)return;
+  p.inscr=st; MOIS.forEach(m=>{p.mois[m]=st;});
+  const ecole=S.user?.ecole||'';
+  sbSaveInscr(id, st, ecole);
+  MOIS.forEach(m=>sbSavePaiement(id, m, st, ecole));
+  render();
+}
+function dlCSV(){
+  const h=['Matricule','Nom','Classe','Tuteur','Tel','Inscription',...MOIS,'Recu','Attendu'];
+  const rows=ELEVES_DATA.map(e=>{const p=S.paiements[e.id]||{};const at=e.inscr+MOIS.length*e.frais;const rc=(p.inscr==='payé'?e.inscr:0)+MOIS.reduce((s,m)=>s+(p.mois?.[m]==='payé'?e.frais:0),0);return[e.mat,e.nom,e.classe,e.tuteur,e.tel,p.inscr==='payé'?'Payé':'Impayé',...MOIS.map(m=>p.mois?.[m]==='payé'?'Payé':'Impayé'),rc,at];});
+  const csv=[h,...rows].map(r=>r.map(v=>'"'+v+'"').join(';')).join('\n');
+  const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='skoulpay.csv';a.click();
+}
+
+// ─── MAIN ─────────────────────────────────────────────────────────────────────
+
+function renderLegende(){
+  const jl=S.config.jourLimite;
+  const today=getJourActuel();
+  const moisAct=getMoisActuel();
+  const delaiDepasse=today>jl;
+  return `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:white;border-radius:10px;padding:10px 14px;margin-bottom:14px;box-shadow:0 1px 6px rgba(0,0,0,.05);border:1px solid #f1f5f9">
+    <span style="font-size:11px;font-weight:700;color:#94a3b8;margin-right:2px">Légende :</span>
+    <span style="display:inline-flex;align-items:center;gap:5px;background:#dcfce7;border:1.5px solid #86efac;border-radius:7px;padding:4px 10px;font-size:11px;font-weight:700;color:#15803d">✓ Payé</span>
+    <span style="display:inline-flex;align-items:center;gap:5px;background:#fee2e2;border:1.5px solid #fca5a5;border-radius:7px;padding:4px 10px;font-size:11px;font-weight:700;color:#b91c1c">✗ En retard</span>
+    <span style="display:inline-flex;align-items:center;gap:5px;background:#fffbeb;border:1.5px solid #fde68a;border-radius:7px;padding:4px 10px;font-size:11px;font-weight:700;color:#b45309">✗ Impayé (délai non dépassé)</span>
+    <span style="display:inline-flex;align-items:center;gap:5px;background:#f8fafc;border:1.5px solid #e2e8f0;border-radius:7px;padding:4px 10px;font-size:11px;font-weight:700;color:#94a3b8">– Mois futur</span>
+    <span style="margin-left:auto;display:inline-flex;align-items:center;gap:5px;background:${delaiDepasse?'#fee2e2':'#f0fdf4'};border:1px solid ${delaiDepasse?'#fca5a5':'#86efac'};border-radius:7px;padding:4px 10px;font-size:11px;font-weight:700;color:${delaiDepasse?'#b91c1c':'#15803d'}">
+      ${delaiDepasse?'⚠️ Délai dépassé (j.'+jl+')':'✓ Délai : avant le '+jl+' · Mois actuel : '+(moisAct||'—')}
+    </span>
+  </div>`;
+}
+
+
+function updateListeEleves(){
+  // Met à jour la liste sans toucher à l'input (conserve le focus)
+  const container=document.getElementById('liste-eleves');
+  if(!container){render();return;}
+  const list=ELEVES_DATA.filter(e=>{
+    if(!e.nom.toLowerCase().includes(S.search.toLowerCase()))return false;
+    if(S.filtre==='tous')return true;
+    const p=S.paiements[e.id];
+    const enR=eleveEnRetard(p,MOIS,S.config.jourLimite);
+    return S.filtre==='retard'?enR:!enR;
+  });
+  container.innerHTML=list.map(el=>{
+    const nb=S.paiements[el.id]?MOIS.filter(m=>S.paiements[el.id].mois[m]==='impayé').length:MOIS.length;
+    const enR=nb>0||S.paiements[el.id]?.inscr==='impayé';
+    return`<div onclick="S.selEleve=${el.id};render()" style="padding:8px;border-radius:9px;margin-bottom:3px;cursor:pointer;background:${S.selEleve===el.id?'#f0f9ff':'transparent'};border:2px solid ${S.selEleve===el.id?'#0ea5e9':'transparent'}">
+      <div style="display:flex;align-items:center;gap:7px">
+        ${av(el.nom.split(' ').map(n=>n[0]).join('').slice(0,2),enR?'#ef4444':'#0ea5e9',27)}
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;font-size:12px;color:#1a1a2e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${el.nom}</div>
+          <div style="font-size:10px;color:#94a3b8">${el.mat}</div>
+        </div>
+        ${enR?`<span style="background:#fee2e2;color:#b91c1c;border-radius:20px;padding:1px 5px;font-size:9px;font-weight:700">${nb}</span>`:'<span style="font-size:12px">✅</span>'}
+      </div>
+    </div>`;
+  }).join('');
+  // Also update filtre buttons
+  const btns=document.querySelectorAll('[data-filtre]');
+  btns.forEach(b=>{
+    const v=b.dataset.filtre;
+    b.style.background=S.filtre===v?({'tous':'#47556922','ok':'#15803d22','retard':'#b91c1c22'}[v]||'#f1f5f9'):'#f1f5f9';
+    b.style.color=S.filtre===v?({'tous':'#475569','ok':'#15803d','retard':'#b91c1c'}[v]||'#64748b'):'#64748b';
+  });
+}
+
+function dlModele(){
+  // Génère un modèle Excel CSV
+  const header=['Matricule','Nom','Classe','Tuteur','Tel','Frais_mensuel','Frais_inscription'];
+  const ex=[
+    ['2024-001','Karim Benali','CM1-A','Ahmed Benali','0661-234567',800,500],
+    ['2024-002','Sara Moussaoui','6ème-B','Fatima Moussaoui','0662-345678',950,600],
+  ];
+  const csv=[header,...ex].map(r=>r.map(v=>'"'+v+'"').join(';')).join('\n');
+  const blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='modele_eleves.csv';a.click();
+}
+
+function lireFichier(input){
+  const file=input.files[0];if(!file)return;
+  const ext=file.name.split('.').pop().toLowerCase();
+  const reader=new FileReader();
+  reader.onload=function(e){
+    try{
+      let rows=[];
+      if(ext==='csv'||ext==='txt'){
+        const txt=e.target.result;
+        const lines=txt.split(/\r?\n/).filter(l=>l.trim());
+        // Detect separator
+        const sep=lines[0].includes(';')?';':',';
+        const clean=l=>l.replace(/^"|"$/g,'').trim();
+        const headers=lines[0].split(sep).map(clean).map(h=>h.toLowerCase());
+        rows=lines.slice(1).filter(l=>l.trim()).map(l=>{
+          const vals=l.split(sep).map(clean);
+          const obj={};headers.forEach((h,i)=>{obj[h]=vals[i]||'';});
+          return obj;
+        });
+      } else {
+        const XLSX=window._XLSX;if(!XLSX){alert('SheetJS pas encore chargé, réessayez dans 2 secondes');return;}
+        const wb=XLSX.read(e.target.result,{type:'array'});
+        const ws=wb.Sheets[wb.SheetNames[0]];
+        rows=XLSX.utils.sheet_to_json(ws,{defval:''});
+      }
+      // Normaliser les colonnes
+      const findCol=(obj,keys)=>{for(const k of Object.keys(obj)){for(const kw of keys){if(k.toLowerCase().includes(kw))return obj[k];}}return '';};
+      const preview=rows.map((r,i)=>({
+        id: ELEVES_DATA.length + i + 1,
+        mat:  String(findCol(r,['matricule','mat'])||'2024-'+(100+ELEVES_DATA.length+i+1)),
+        nom:  String(findCol(r,['nom','name','prenom'])||''),
+        classe:String(findCol(r,['classe','class'])||''),
+        niveau:String(findCol(r,['niveau','level'])||''),
+        tuteur:String(findCol(r,['tuteur','parent','responsable'])||''),
+        tel:   String(findCol(r,['tel','phone','mobile'])||''),
+        frais: parseFloat(findCol(r,['frais_m','frais mensuel','mensuel','frais/m'])||findCol(r,['frais'])||0)||0,
+        inscr: parseFloat(findCol(r,['inscr','inscription'])||0)||0,
+      })).filter(r=>r.nom.trim());
+      if(!preview.length){alert('Aucun élève trouvé. Vérifiez le format du fichier.');return;}
+      S.importPreview=preview;render();
+    }catch(err){alert('Erreur lecture fichier : '+err.message);}
+  };
+  if(ext==='csv'||ext==='txt') reader.readAsText(file,'UTF-8');
+  else reader.readAsArrayBuffer(file);
+  input.value='';
+}
+
+async function confirmerImport(mode){
+  const preview=S.importPreview;if(!preview)return;
+  if(mode==='remplacer'){
+    ELEVES_DATA.length=0;
+    let maxId=0;
+    preview.forEach(e=>{ELEVES_DATA.push(e);if(e.id>maxId)maxId=e.id;});
+    // Init paiements pour les nouveaux
+    preview.forEach(e=>{if(!S.paiements[e.id]){S.paiements[e.id]={inscr:'impayé',mois:{}};MOIS.forEach(m=>{S.paiements[e.id].mois[m]='impayé';});}});
+  } else {
+    const maxId=ELEVES_DATA.length>0?Math.max(...ELEVES_DATA.map(e=>e.id)):0;
+    preview.forEach((e,i)=>{
+      e.id=maxId+i+1;
+      ELEVES_DATA.push(e);
+      S.paiements[e.id]={inscr:'impayé',mois:{}};
+      MOIS.forEach(m=>{S.paiements[e.id].mois[m]='impayé';});
+    });
+  }
+  // Sauvegarder dans Supabase
+  if(sb && S.user){
+    const ecole = S.user.ecole||'';
+    const toInsert = (mode==='remplacer'?preview:preview).map(e=>({
+      matricule:e.mat, nom:e.nom, classe:e.classe||'',
+      niveau:e.niveau||'', frais:e.frais||0, inscr:e.inscr||0,
+      tuteur:e.tuteur||'', tel:e.tel||'', ecole
+    }));
+    if(mode==='remplacer'){
+      await sb.from('eleves').delete().eq('ecole',ecole);
+    }
+    if(toInsert.length>0) await sb.from('eleves').insert(toInsert);
+  }
+  S.importPreview=null;S.importMode=null;
+  render();
+}
+
+function render(){
+  const app=document.getElementById('app');
+  if(!S.user){app.innerHTML=renderLogin();return;}
+  let body='';
+  if(S.tab==='dashboard')body=renderDashboard();
+  else if(S.tab==='saisir')body=renderSaisir();
+  else if(S.tab==='alertes')body=renderAlertes();
+  else if(S.tab==='rapport')body=renderRapport();
+  else if(S.tab==='eleves')body=renderEleves();
+  else if(S.tab==='admin')body=renderAdmin();
+  else if(S.tab==='params')body=renderParams();
+  app.innerHTML=renderTopbar()+renderTabs()+`<div style="max-width:1200px;margin:0 auto;padding:20px 16px">${body}</div>`;
+}
+async function doLogin(){
+  const l=document.getElementById('li')?.value||'';
+  const m=document.getElementById('mp')?.value||'';
+  
+  // Afficher chargement
+  const btn=document.querySelector('button[onclick="doLogin()"]');
+  if(btn){btn.textContent='Connexion...';btn.disabled=true;}
+  
+  // Essai Supabase d'abord
+  let u = await sbLogin(l, m);
+  
+  // Fallback local si Supabase pas dispo
+  if(!u) u = S.users.find(x=>x.login===l&&x.mdp===m);
+  
+  if(u){
+    S.user=u;
+    S.tab='dashboard';
+    // Charger les données de l'école
+    render(); // afficher dashboard vide pendant chargement
+    await chargerDonnees(u);
+    render(); // re-render avec données
+  } else {
+    const e=document.getElementById('err');
+    if(e){e.style.display='block';e.textContent='Identifiants incorrects';}
+    if(btn){btn.textContent='Se connecter →';btn.disabled=false;}
+  }
+}
+function qLogin(l,m){const i=document.getElementById('li');const p=document.getElementById('mp');if(i)i.value=l;if(p)p.value=m;}
+function logout(){S.user=null;S.tab='dashboard';render();}
+function setTab(t){S.tab=t;render();}
+initSupabase();
+render();
+</script>
+</body>
+</html>
